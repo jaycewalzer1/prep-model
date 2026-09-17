@@ -1,0 +1,12 @@
+extends: base.yaml
+run_name: dev
+population:
+  n_individuals: 5000
+time:
+  horizon_years: 5
+uncertainty:
+  parameter_draws: 20
+  stochastic_replicates: 2
+calibration:
+  accepted_ensemble_size: 20
+  proposals: 8000

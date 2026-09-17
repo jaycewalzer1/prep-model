@@ -1,0 +1,143 @@
+run_name: main
+seed: 20260917
+device: cpu
+
+# Every monetary input is converted to this price year before use.
+price_year: 2025
+discount_rate: 0.03
+discount_rates_sensitivity: [0.0, 0.05]
+willingness_to_pay: [50000, 100000, 150000]
+
+population:
+  n_individuals: 20000
+  report_per: 1000          # results are reported per 1000 eligible adults
+  city_scale_denominator: null   # set only when a defensible denominator exists
+
+time:
+  step_weeks: 1
+  horizon_years: 10         # dynamic transmission and programme delivery
+  budget_years: 5           # annual cash flow / budget impact reporting
+  terminal_value: true      # analytic continuation beyond the horizon
+  post_horizon_policy: "programme stops at the horizon; no new initiations are credited beyond it"
+
+arms:
+  - id: A
+    name: usual_care
+    delivery: none
+    product: none
+    injectable_uptake: false
+    description: "Existing testing, ART, prevention, syringe services and housing services"
+  - id: B
+    name: clinic_lenacapavir
+    delivery: clinic
+    product: lenacapavir
+    injectable_uptake: true
+    description: "Injections offered through existing clinics with ordinary appointment support"
+  - id: C
+    name: lowbarrier_lenacapavir
+    delivery: lowbarrier
+    product: lenacapavir
+    injectable_uptake: true
+    description: "Walk-in, mobile and shelter-based delivery with navigation and active re-engagement"
+  - id: D
+    name: lowbarrier_cabotegravir
+    delivery: lowbarrier
+    product: cabotegravir
+    injectable_uptake: true
+    description: "Same outreach with the cabotegravir schedule and regimen-specific costs"
+  - id: E
+    name: matched_contact_control
+    delivery: lowbarrier
+    product: none
+    injectable_uptake: false
+    description: "Same outreach, HIV testing and ART linkage as arm C without additional injectable uptake. A modelling counterfactual, not a proposal to withhold care."
+
+reference_arm: A
+
+# Cost categories are assigned to a payer, and a perspective is a set of categories.
+payers:
+  program_drug: program_operator
+  program_delivery: program_operator
+  program_testing: program_operator
+  hiv_care: healthcare_payer
+  non_hiv_care: healthcare_payer
+  housing: public_housing
+  patient_time: patient
+
+perspectives:
+  program_operator: [program_drug, program_delivery, program_testing]
+  healthcare_system: [program_drug, program_delivery, program_testing, hiv_care, non_hiv_care]
+  consolidated_public_sector: [program_drug, program_delivery, program_testing, hiv_care, non_hiv_care, housing]
+  societal: [program_drug, program_delivery, program_testing, hiv_care, non_hiv_care, housing, patient_time]
+
+primary_perspective: consolidated_public_sector
+
+uncertainty:
+  parameter_draws: 200        # expand toward 1000 only if decision probabilities are unstable
+  stochastic_replicates: 3
+  monte_carlo_target_se_qaly: 0.02
+
+experiments:
+  one_way:
+    - lambda_sex_scale
+    - len_efficacy_sexual
+    - attendance_prob_lowbarrier
+    - accept_prob_lowbarrier
+    - cost_len_per_dose
+    - cost_contact_lowbarrier
+    - cost_hiv_care_art_suppressed
+    - reach_rate_annual_lowbarrier
+  two_way:
+    # The plan asks for net cost over incidence and drug price. The axis varied is
+    # the transmission scale parameter itself rather than a target annual risk that
+    # would have to be back-solved, so the figure's axis is what the model was given.
+    - [lambda_sex_scale, cost_len_per_dose]
+  scenario_grid:
+    baseline_annual_risk: [0.001, 0.005, 0.01, 0.02, 0.05]
+    program_coverage: [0.10, 0.25, 0.50, 0.75]
+    visit_retention: [0.40, 0.60, 0.80, 0.95]
+    drug_cost_per_year: [1000, 3000, 5000, 10000, 28218]
+    delivery_cost_per_year: [250, 750, 1500, 3000]
+  structural:
+    closed_mixing:
+      external_hazard_sex_annual: 0.0
+      external_hazard_inj_annual: 0.0
+    direct_effects_only: true          # freeze infectious prevalence at baseline
+    injection_route_efficacy:
+      injectable_efficacy_injection_route: 0.70
+    exposure_reach_gradient:
+      reach_exposure_gradient: 0.75
+    unconstrained_capacity:
+      capacity_initiations_per_1000_per_week: 1000.0
+      capacity_contacts_per_1000_per_week: 10000.0
+
+calibration:
+  accepted_ensemble_size: 50
+  # Acceptance runs around 0.3%, so the proposal count is set to give an ensemble
+  # of the retained size rather than whatever happens to squeeze through.
+  proposals: 40000
+  free_parameters:
+    - lambda_sex_scale
+    - lambda_inj_scale
+    - external_hazard_sex_annual
+    - external_hazard_inj_annual
+    - testing_rate_annual
+    - art_init_rate_annual
+    - disengage_rate_annual
+    - reengage_rate_annual
+    - baseline_undiagnosed_fraction
+    - baseline_hiv_prevalence
+  targets:
+    # Calibration targets are stated as hypothetical surveillance summaries until a
+    # local data-use agreement is in place. Nothing here is an Atlanta measurement.
+    diagnosed_prevalence:        {value: 0.044, tolerance: 0.010, flag: hypothetical}
+    annual_diagnoses_per_1000:   {value: 5.2,   tolerance: 2.0,   flag: hypothetical}
+    suppressed_among_diagnosed:  {value: 0.51,  tolerance: 0.10,  flag: hypothetical}
+    share_unsheltered:           {value: 0.38,  tolerance: 0.08,  flag: hypothetical}
+  validation_targets:
+    # Held out of the fit and scored afterwards. Fitting every observable leaves
+    # nothing to check the fitted model against.
+    prevalence:                  {value: 0.062, tolerance: 0.018, flag: hypothetical}
+    incidence_per_100py:         {value: 0.90,  tolerance: 0.60,  flag: hypothetical}
+
+parameter_overrides: {}
