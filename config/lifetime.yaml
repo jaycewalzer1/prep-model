@@ -1,0 +1,33 @@
+extends: base.yaml
+run_name: lifetime
+
+# The question this configuration exists to answer: does injectable PrEP look
+# different once the lifetime treatment cost of an averted infection is simulated
+# rather than annuitised?
+#
+# The terminal value is an honest continuation, but it freezes every person in the
+# health and care state they happened to occupy at the horizon. New infections are
+# disproportionately undiagnosed at a short horizon, and an undiagnosed person is
+# costed at the undiagnosed rate for the rest of their life -- roughly a fiftieth
+# of the suppressed-on-ART rate. That undercounts the cost of an infection, and it
+# undercounts it specifically in the arm that prevents infections, so it biases the
+# comparison against prevention.
+#
+# Running to 40 years lets the cascade actually happen: people are diagnosed, start
+# ART, disengage, progress and die inside the simulation, at the state-specific
+# costs the model already uses. The terminal value still applies, but by then it
+# covers a much smaller and much more settled remainder.
+time:
+  horizon_years: 40
+  budget_years: 5
+
+population:
+  n_individuals: 5000
+
+uncertainty:
+  parameter_draws: 20
+  stochastic_replicates: 2
+
+calibration:
+  accepted_ensemble_size: 20
+  proposals: 8000
