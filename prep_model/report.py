@@ -29,6 +29,22 @@ from .states import COST_CATEGORIES
 MPL_BACKEND = "Agg"
 
 
+def _years(p: Params, cfg: Config, with_migration: bool) -> float:
+    """Discounted years over which a treated infection actually accrues cost here.
+
+    Leaving the modelled population ends the cost stream exactly as death does, so
+    out-migration belongs in the hazard. Quoting the two side by side is the only
+    way a reader can see how much of an infection's lifetime cost this model is in
+    a position to count.
+    """
+    import math
+
+    hazard = 1.0 / p["life_expectancy_hiv_suppressed_at_45"]
+    if with_migration:
+        hazard += p["migration_rate_per_year"]
+    return 1.0 / (math.log(1.0 + cfg.discount_rate) + hazard)
+
+
 # -- small formatting helpers -------------------------------------------------
 
 def money(x: float | None) -> str:
@@ -727,7 +743,13 @@ def build_report(cfg: Config, registry: Registry, p: Params, out: RunOutcome,
         "The terminal value is an exponential-survival annuity, which assumes a constant "
         "hazard after the horizon.",
         "Out-migration removes people from the model; their later outcomes are unobserved "
-        "and uncosted, which understates both costs and benefits by an unknown amount.",
+        "and uncosted. This is not a small correction and it is not symmetric: at "
+        f"{p['migration_rate_per_year']:.0%} a year the treatment cost of an infection is "
+        f"worth {_years(p, cfg, with_migration=True):.1f} "
+        f"discounted years against {_years(p, cfg, with_migration=False):.1f} "
+        "on mortality alone, so the model recovers a fraction of the lifetime cost an "
+        "averted infection would really avoid, and it loses it from the arm that averts "
+        "infections. The bias runs against prevention.",
         "The acquisition price used is an announced list price, not a negotiated contract "
         "price, and it is the single input that moves the cost conclusion most.",
     ]:
