@@ -139,6 +139,13 @@ def ladder(cfg: Config, p: Params, arm_id: str = "C",
         "+ nobody refuses or fails to start": {"refusal_permanent_prob": 0.0,
                                                "accept_prob_lowbarrier": 1.0,
                                                "initiate_given_accept_lowbarrier": 1.0},
+        # This last row is very nearly a null, and that is the finding, not a fault.
+        # Capacity is saturated by construction here, so a missed visit is retried the
+        # following week and the injection is caught up: imperfect attendance costs
+        # almost nothing when there is always a free slot. Measured on config/dev.yaml
+        # over three replicates it moves mean coverage 93.10% -> 93.20%. The coverage
+        # that saturating delivery cannot buy is lost to refusal and to failure to
+        # initiate, not to lapse. Do not "fix" this row; it is reporting a real result.
         "+ perfect retention": {"attendance_prob_lowbarrier": 1.0,
                                "ae_discontinuation_rate_annual": 0.0},
     }
