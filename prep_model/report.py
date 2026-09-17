@@ -547,6 +547,13 @@ def build_report(cfg: Config, registry: Registry, p: Params, out: RunOutcome,
     A("")
     A(table_health(out, cfg, psa))
     A("")
+    A(f"Counts and averted counts here are from a single stochastic replicate. "
+      f"Table 6 and the conclusion average over all "
+      f"{int(cfg.section('uncertainty').get('stochastic_replicates', 1))}, "
+      "so the two differ by the replicate noise, "
+      "which in this model is large. Where they disagree the averaged figure is "
+      "the one to quote, and neither is meaningful without the interval.")
+    A("")
 
     A(f"## 6. Table 4. Annual cash spending, years 1-{cfg.budget_years}")
     A("")
