@@ -101,6 +101,43 @@ def settings_for(arm: Arm, p: Params) -> DeliverySettings | None:
     )
 
 
+TIE_JITTER = 1e-6
+"""Scale of the random tie-break added to a supplied priority score.
+
+A score built from a handful of categorical features puts many people on exactly
+the same number. Sorting those by row order would let position in the array
+decide who gets a scarce injection slot, so the draw that would have rationed
+them anyway breaks the tie instead.
+"""
+
+
+@dataclass
+class DeliveryPlan:
+    """How one week of finite capacity is rationed.
+
+    The defaults reproduce the model's own policy exactly: scheduled injection
+    visits are served before new outreach, and within each queue the people who
+    get served are chosen at random. Both of those are choices rather than
+    neutral defaults, which is why they are expressed here as something a caller
+    can vary rather than left implicit in the code.
+    """
+
+    visit_share: float = 1.0
+    """Share of the week's contact capacity reserved for scheduled and returning
+    injection visits. Capacity the visits do not use passes to outreach."""
+
+    priority: torch.Tensor | None = None
+    """Per-person score, lowest served first. ``None`` means serve at random."""
+
+    def order(self, draw: torch.Tensor) -> torch.Tensor:
+        if self.priority is None:
+            return draw
+        return self.priority + draw * TIE_JITTER
+
+
+_DEFAULT_PLAN = DeliveryPlan()
+
+
 def _cap(mask: torch.Tensor, priority: torch.Tensor, limit: int) -> tuple[torch.Tensor, int]:
     """Keep at most ``limit`` of ``mask``, preferring the lowest ``priority``.
 
@@ -127,12 +164,15 @@ def _charge_visit(ledger: Ledger, s: DeliverySettings, p: Params, step: int, n: 
 
 def step_delivery(c: Cohort, arm: Arm, s: DeliverySettings, regimen: Regimen | None,
                   ledger: Ledger, seed: int, step: int, dt: float, p: Params,
-                  active: torch.Tensor) -> DeliveryCounters:
+                  active: torch.Tensor,
+                  plan: DeliveryPlan | None = None) -> DeliveryCounters:
     """One week of offers, injections, lapses and returns."""
     k = DeliveryCounters()
+    plan = plan if plan is not None else _DEFAULT_PLAN
     eligible_pool = int(active.sum())
     contact_budget = int(s.capacity_contacts * eligible_pool / 1000.0)
     init_budget = int(s.capacity_initiations * eligible_pool / 1000.0)
+    visit_budget = int(contact_budget * plan.visit_share)
 
     # ---- 1. Scheduled injection visits come first when capacity is short. ----
     if regimen is not None and arm.injectable_uptake:
@@ -150,7 +190,7 @@ def step_delivery(c: Cohort, arm: Arm, s: DeliverySettings, regimen: Regimen | N
         returning = due & c.lapsed & (u_reeng < s.reengage_prob_weekly)
         attending = on_time | returning
 
-        attending, blocked = _cap(attending, u_attend, contact_budget)
+        attending, blocked = _cap(attending, plan.order(u_attend), visit_budget)
         k.capacity_blocked_contacts += blocked
         contact_budget -= int(attending.sum())
 
@@ -198,7 +238,7 @@ def step_delivery(c: Cohort, arm: Arm, s: DeliverySettings, regimen: Regimen | N
     p_reach = 1.0 - torch.exp(-rate.clamp_min(0.0) * dt)
     u_reach = uniform(seed, Stream.PREP_REACH, step, c.uid)
     contacted = reachable & (u_reach < p_reach)
-    contacted, blocked = _cap(contacted, u_reach, contact_budget)
+    contacted, blocked = _cap(contacted, plan.order(u_reach), contact_budget)
     k.capacity_blocked_contacts += blocked
     if blocked:
         k.steps_capacity_bound += 1
@@ -247,7 +287,7 @@ def step_delivery(c: Cohort, arm: Arm, s: DeliverySettings, regimen: Regimen | N
 
     u_init = uniform(seed, Stream.PREP_INITIATE, step, c.uid)
     starting = accepted & (u_init < s.initiate_given_accept)
-    starting, blocked = _cap(starting, u_init, init_budget)
+    starting, blocked = _cap(starting, plan.order(u_init), init_budget)
     k.capacity_blocked_initiations += blocked
     if blocked:
         k.steps_capacity_bound += 1

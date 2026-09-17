@@ -52,136 +52,195 @@ def _year_index(step: int, dt: float, n_years: int) -> int:
     return min(int(step * dt), n_years - 1)
 
 
-def run_arm(cfg: Config, p: Params, arm: Arm, replicate: int = 0,
-            baseline: Cohort | None = None,
-            frozen_prevalence: bool = False) -> ArmResult:
-    seed = cfg.seed + 10_000 * replicate
-    dt = cfg.dt
-    n_steps = cfg.n_steps
-    n_years = max(1, int(round(cfg.horizon_years)))
+@dataclass
+class Simulation:
+    """One arm in progress, advanced a step at a time.
 
-    c = (baseline.clone() if baseline is not None
-         else build_cohort(seed, cfg.n_individuals, n_steps, dt, p))
-    ledger = Ledger(n_steps=n_steps, dt=dt, discount_rate=cfg.discount_rate, n_years=n_years)
-    counters = DeliveryCounters()
-    settings = delivery.settings_for(arm, p)
-    regimen = regimen_for(arm.product, p)
+    ``run_arm`` is this class driven to the horizon in a loop. It is separated
+    out so that a caller who needs to intervene between steps -- the reinforcement
+    learning environment in ``env.py`` -- runs the same step in the same order
+    rather than a second copy of it that can drift.
+    """
 
-    frozen = transmission.baseline_prevalence(c, p, c.active(0)) if frozen_prevalence else None
+    cfg: Config
+    p: Params
+    arm: Arm
+    replicate: int
+    seed: int
+    c: Cohort
+    ledger: Ledger
+    counters: DeliveryCounters
+    settings: delivery.DeliverySettings | None
+    regimen: object | None
+    frozen: dict[str, torch.Tensor] | None
+    annual: dict[str, list[float]]
+    trace: dict[str, list[float]]
+    totals: dict[str, int]
+    step: int = 0
+    cumulative_infections: int = 0
+    plan: delivery.DeliveryPlan | None = None
+    """How this week's finite capacity is rationed. ``None`` is the model's own
+    policy: scheduled visits before new outreach, random rationing within each."""
 
-    annual = {k: [0.0] * n_years for k in
-              ("infections", "hiv_deaths", "deaths", "doses", "initiations", "contacts",
-               "diagnoses", "person_years", "person_years_on_program")}
-    trace = {k: [] for k in ("cumulative_infections", "on_program", "active", "coverage")}
+    @classmethod
+    def start(cls, cfg: Config, p: Params, arm: Arm, replicate: int = 0,
+              baseline: Cohort | None = None,
+              frozen_prevalence: bool = False) -> "Simulation":
+        seed = cfg.seed + 10_000 * replicate
+        n_years = max(1, int(round(cfg.horizon_years)))
+        c = (baseline.clone() if baseline is not None
+             else build_cohort(seed, cfg.n_individuals, cfg.n_steps, cfg.dt, p))
+        return cls(
+            cfg=cfg, p=p, arm=arm, replicate=replicate, seed=seed, c=c,
+            ledger=Ledger(n_steps=cfg.n_steps, dt=cfg.dt,
+                          discount_rate=cfg.discount_rate, n_years=n_years),
+            counters=DeliveryCounters(),
+            settings=delivery.settings_for(arm, p),
+            regimen=regimen_for(arm.product, p),
+            frozen=(transmission.baseline_prevalence(c, p, c.active(0))
+                    if frozen_prevalence else None),
+            annual={k: [0.0] * n_years for k in
+                    ("infections", "hiv_deaths", "deaths", "doses", "initiations", "contacts",
+                     "diagnoses", "person_years", "person_years_on_program")},
+            trace={k: [] for k in ("cumulative_infections", "on_program", "active", "coverage")},
+            totals={"infections": 0, "deaths": 0, "hiv_deaths": 0, "migrations": 0,
+                    "background_diagnoses": 0, "art_initiations": 0, "disengagements": 0,
+                    "progressed_to_advanced": 0, "housing_moves": 0},
+        )
 
-    totals = {"infections": 0, "deaths": 0, "hiv_deaths": 0, "migrations": 0,
-              "background_diagnoses": 0, "art_initiations": 0, "disengagements": 0,
-              "progressed_to_advanced": 0, "housing_moves": 0}
-    cumulative_infections = 0
+    @property
+    def done(self) -> bool:
+        return self.step >= self.cfg.n_steps
 
-    for step in range(n_steps):
+    def advance(self) -> dict[str, float]:
+        """One week. Returns what happened in it, for a caller that needs it."""
+        cfg, p, c, ledger = self.cfg, self.p, self.c, self.ledger
+        step, dt = self.step, cfg.dt
+        n_years = len(self.annual["infections"])
         active = c.active(step)
         n_active = int(active.sum())
         year = _year_index(step, dt, n_years)
 
         economics.accrue_step(ledger, c, active, p, step, dt)
         delivery.accrue_background_prevention(ledger, c, active, p, step, dt)
-        delivery.accrue_fixed_program_cost(ledger, arm, n_active, p, step, dt)
-        annual["person_years"][year] += n_active * dt
+        delivery.accrue_fixed_program_cost(ledger, self.arm, n_active, p, step, dt)
+        self.annual["person_years"][year] += n_active * dt
 
-        if settings is not None:
-            k = delivery.step_delivery(c, arm, settings, regimen, ledger, seed, step, dt, p, active)
-            counters.add(k)
-            annual["doses"][year] += k.doses
-            annual["initiations"][year] += k.initiations
-            annual["contacts"][year] += k.contacts
-            annual["diagnoses"][year] += k.program_diagnoses
+        k = DeliveryCounters()
+        if self.settings is not None:
+            k = delivery.step_delivery(c, self.arm, self.settings, self.regimen, ledger,
+                                       self.seed, step, dt, p, active, plan=self.plan)
+            self.counters.add(k)
+            self.annual["doses"][year] += k.doses
+            self.annual["initiations"][year] += k.initiations
+            self.annual["contacts"][year] += k.contacts
+            self.annual["diagnoses"][year] += k.program_diagnoses
 
-        e_sex, e_inj = protection(c, regimen, p)
-        inf = transmission.step_infections(c, seed, step, dt, p, active, e_sex, e_inj, frozen)
-        totals["infections"] += inf["infections"]
-        cumulative_infections += inf["infections"]
-        annual["infections"][year] += inf["infections"]
+        e_sex, e_inj = protection(c, self.regimen, p)
+        inf = transmission.step_infections(c, self.seed, step, dt, p, active,
+                                           e_sex, e_inj, self.frozen)
+        self.totals["infections"] += inf["infections"]
+        self.cumulative_infections += inf["infections"]
+        self.annual["infections"][year] += inf["infections"]
 
-        dis = natural_history.step_disease(c, seed, step, dt, p, active)
+        dis = natural_history.step_disease(c, self.seed, step, dt, p, active)
         for key, v in dis.items():
-            totals[key] = totals.get(key, 0) + v
-        annual["diagnoses"][year] += dis["background_diagnoses"]
+            self.totals[key] = self.totals.get(key, 0) + v
+        self.annual["diagnoses"][year] += dis["background_diagnoses"]
 
-        mv = housing.step_housing(c, seed, step, dt, p, active)
-        totals["housing_moves"] += mv["housing_moves"]
+        mv = housing.step_housing(c, self.seed, step, dt, p, active)
+        self.totals["housing_moves"] += mv["housing_moves"]
 
-        ex = natural_history.step_exits(c, seed, step, dt, p, active)
-        totals["deaths"] += ex["deaths"]
-        totals["hiv_deaths"] += ex["hiv_deaths"]
-        totals["migrations"] += ex["migrations"]
-        annual["deaths"][year] += ex["deaths"]
-        annual["hiv_deaths"][year] += ex["hiv_deaths"]
+        ex = natural_history.step_exits(c, self.seed, step, dt, p, active)
+        self.totals["deaths"] += ex["deaths"]
+        self.totals["hiv_deaths"] += ex["hiv_deaths"]
+        self.totals["migrations"] += ex["migrations"]
+        self.annual["deaths"][year] += ex["deaths"]
+        self.annual["hiv_deaths"][year] += ex["hiv_deaths"]
 
         on_prog = active & c.on_program
         c.person_years_on_program = torch.where(on_prog,
                                                 c.person_years_on_program + dt,
                                                 c.person_years_on_program)
-        annual["person_years_on_program"][year] += int(on_prog.sum()) * dt
+        self.annual["person_years_on_program"][year] += int(on_prog.sum()) * dt
         c.age = torch.where(active, c.age + dt, c.age)
         c.weeks_since_dose = torch.where(active & c.on_program,
                                          c.weeks_since_dose + cfg.step_weeks,
                                          c.weeks_since_dose)
 
-        trace["cumulative_infections"].append(float(cumulative_infections))
-        trace["on_program"].append(float(on_prog.sum()))
-        trace["active"].append(float(n_active))
-        trace["coverage"].append(float(on_prog.sum()) / max(1, n_active))
+        self.trace["cumulative_infections"].append(float(self.cumulative_infections))
+        self.trace["on_program"].append(float(on_prog.sum()))
+        self.trace["active"].append(float(n_active))
+        self.trace["coverage"].append(float(on_prog.sum()) / max(1, n_active))
 
-    final_active = c.active(n_steps - 1)
-    terminal_info = {}
-    if cfg.terminal_value:
-        terminal_info = economics.accrue_terminal(ledger, c, final_active, p, n_steps)
+        self.step += 1
+        return {"active": float(n_active), "infections": float(inf["infections"]),
+                "on_program": float(on_prog.sum()), **{f"delivery_{a}": float(b)
+                                                       for a, b in k.as_dict().items()}}
 
-    with_hiv = final_active & (c.hiv_stage != int(HivStage.SUSCEPTIBLE))
-    diagnosed = with_hiv & (c.care_state >= int(CareState.DIAGNOSED_NO_ART))
-    suppressed = with_hiv & (c.care_state == int(CareState.ART_SUPPRESSED))
-    n_final = max(1, int(final_active.sum()))
+    def finish(self) -> ArmResult:
+        cfg, p, c, ledger = self.cfg, self.p, self.c, self.ledger
+        n_steps = cfg.n_steps
+        final_active = c.active(n_steps - 1)
+        terminal_info = {}
+        if cfg.terminal_value:
+            terminal_info = economics.accrue_terminal(ledger, c, final_active, p, n_steps)
 
-    epi = {
-        "infections": float(totals["infections"]),
-        "deaths": float(totals["deaths"]),
-        "hiv_deaths": float(totals["hiv_deaths"]),
-        "migrations": float(totals["migrations"]),
-        "person_years": float(sum(annual["person_years"])),
-        "person_years_on_program": float(sum(annual["person_years_on_program"])),
-        "life_years_discounted": ledger.life_years,
-        "qalys_discounted": ledger.total_qalys(),
-        "final_population": float(final_active.sum()),
-        "final_prevalence": float(with_hiv.sum()) / n_final,
-        "ever_initiated": float(c.ever_initiated.sum()),
-        "switchers_from_oral": float(c.switched_from_oral.sum()),
-        **{k: float(v) for k, v in totals.items()},
-        **terminal_info,
-    }
+        with_hiv = final_active & (c.hiv_stage != int(HivStage.SUSCEPTIBLE))
+        diagnosed = with_hiv & (c.care_state >= int(CareState.DIAGNOSED_NO_ART))
+        suppressed = with_hiv & (c.care_state == int(CareState.ART_SUPPRESSED))
+        n_final = max(1, int(final_active.sum()))
+        annual, totals = self.annual, self.totals
 
-    accounting = {
-        "allocated": float(c.n),
-        "entered": float((c.entry_step < n_steps).sum()),
-        "deaths": float(totals["deaths"]),
-        "migrations": float(totals["migrations"]),
-        "alive_and_resident_at_end": float(final_active.sum()),
-        "not_yet_entered": float((c.entry_step >= n_steps).sum()),
-    }
+        epi = {
+            "infections": float(totals["infections"]),
+            "deaths": float(totals["deaths"]),
+            "hiv_deaths": float(totals["hiv_deaths"]),
+            "migrations": float(totals["migrations"]),
+            "person_years": float(sum(annual["person_years"])),
+            "person_years_on_program": float(sum(annual["person_years_on_program"])),
+            "life_years_discounted": ledger.life_years,
+            "qalys_discounted": ledger.total_qalys(),
+            "final_population": float(final_active.sum()),
+            "final_prevalence": float(with_hiv.sum()) / n_final,
+            "ever_initiated": float(c.ever_initiated.sum()),
+            "switchers_from_oral": float(c.switched_from_oral.sum()),
+            **{k: float(v) for k, v in totals.items()},
+            **terminal_info,
+        }
 
-    calibration_outputs = {
-        "diagnosed_prevalence": float(diagnosed.sum()) / n_final,
-        "annual_diagnoses_per_1000": (sum(annual["diagnoses"][-3:]) / 3.0) /
-                                     max(1.0, sum(annual["person_years"][-3:]) / 3.0) * 1000.0,
-        "suppressed_among_diagnosed": float(suppressed.sum()) / max(1, int(diagnosed.sum())),
-        "share_unsheltered": float((final_active & (c.housing == int(Housing.UNSHELTERED))).sum()) / n_final,
-    }
+        accounting = {
+            "allocated": float(c.n),
+            "entered": float((c.entry_step < n_steps).sum()),
+            "deaths": float(totals["deaths"]),
+            "migrations": float(totals["migrations"]),
+            "alive_and_resident_at_end": float(final_active.sum()),
+            "not_yet_entered": float((c.entry_step >= n_steps).sum()),
+        }
 
-    return ArmResult(
-        arm_id=arm.id, arm_name=arm.name, replicate=replicate, ledger=ledger,
-        counters=counters, epi=epi, annual=annual, trace=trace,
-        accounting=accounting, calibration_outputs=calibration_outputs,
-    )
+        calibration_outputs = {
+            "diagnosed_prevalence": float(diagnosed.sum()) / n_final,
+            "annual_diagnoses_per_1000": (sum(annual["diagnoses"][-3:]) / 3.0) /
+                                         max(1.0, sum(annual["person_years"][-3:]) / 3.0) * 1000.0,
+            "suppressed_among_diagnosed": float(suppressed.sum()) / max(1, int(diagnosed.sum())),
+            "share_unsheltered": float((final_active & (c.housing == int(Housing.UNSHELTERED))).sum())
+                                 / n_final,
+        }
+
+        return ArmResult(
+            arm_id=self.arm.id, arm_name=self.arm.name, replicate=self.replicate,
+            ledger=ledger, counters=self.counters, epi=epi, annual=annual, trace=self.trace,
+            accounting=accounting, calibration_outputs=calibration_outputs,
+        )
+
+
+def run_arm(cfg: Config, p: Params, arm: Arm, replicate: int = 0,
+            baseline: Cohort | None = None,
+            frozen_prevalence: bool = False) -> ArmResult:
+    sim = Simulation.start(cfg, p, arm, replicate, baseline, frozen_prevalence)
+    while not sim.done:
+        sim.advance()
+    return sim.finish()
 
 
 def run_all_arms(cfg: Config, p: Params, replicate: int = 0,

@@ -139,12 +139,76 @@ standard deviation of infections averted is roughly a fifth of its mean. A
 single run is not a result. `stochastic_replicates` in the config is set low for
 speed; raise it before quoting a number.
 
+## The reinforcement learning environment
+
+`prep_model/env.py` wraps the same simulation as a sequential decision problem.
+It is deliberately *behind* the cost-effectiveness analysis rather than under it:
+the CEA does not import it, and nothing in the report depends on it.
+
+```python
+from prep_model.config import load_config
+from prep_model.params import Registry
+from prep_model.env import PrepEnv, compare, constant_policy, seed_bank
+
+cfg = load_config("config/base.yaml")
+params = Registry.load().resolve(cfg.price_year, overrides=cfg.overrides)
+env = PrepEnv(cfg, params, arm_id="C", wtp=100_000.0)
+
+train, held = seed_bank(cfg.seed, 32, held_out=16)
+serve_highest_exposure_first = constant_policy((1.0, 1.0, 1.0, 0.0, 0.0, 0.0))
+print(compare(env, serve_highest_exposure_first, seeds=held))
+```
+
+A step is one week. The **action** is six numbers: the share of contact capacity
+reserved for scheduled injection visits, and five weights over the features a
+priority score may be built from — exposure group, sleeping outside, sharing
+equipment, how overdue a visit is, and whether one was already missed. Every one
+of those is something an outreach worker could know at the door. The latent
+engagement propensity that actually drives retention in the model is *not*
+available to the policy, because a policy that used it could not be run.
+
+The **observation** is thirteen numbers a programme could genuinely see: its own
+throughput and queue, coverage and lapse rates, the exposure mix of the people it
+is in contact with. True prevalence and incidence are withheld.
+
+The **reward** is the increment in net monetary benefit, `wtp * ΔQALYs − Δcost`,
+per 1000 population, terminal value included in the final step. Summed over an
+episode it equals exactly what the evaluation would report for that arm, which a
+test asserts. Because the environment is seeded by counter-based RNG, two
+policies run on the same seed share every draw they do not change, so the
+difference in returns *is* the incremental net benefit — no control arm has to be
+simulated to get it.
+
+Only one thing about the world can be changed, and only where the model says a
+policy could: the rationing of finite weekly capacity, via `DeliveryPlan` in
+`delivery.py`. `DeliveryPlan()` with its defaults is the model's own hard-coded
+policy, so the default action reproduces `simulate.run_arm` bit for bit. When
+capacity is not binding, no action changes anything — also a test.
+
+Three caveats, which are the reason this is a side door and not the front one:
+
+1. **The noise floor is high.** Replicate standard deviation of infections
+   averted is around a fifth of the mean. Any policy gradient computed from
+   unpaired episodes is mostly estimating the seed. Use `compare`, which pairs on
+   common random numbers; `test_pairing_removes_most_of_the_noise` requires the
+   paired standard error to be under half the unpaired one, and in practice it is
+   far smaller than that.
+2. **The model is under-determined, and an optimizer will find that out.** Most
+   parameters are transported or hypothetical. A policy tuned against them is
+   tuned against assumptions, not against the world. `seed_bank(..., held_out=n)`
+   exists so that a claimed improvement can at least be checked on seeds it was
+   not fitted to; it cannot check it on parameters it was not fitted to.
+3. **It answers a question nobody asked.** The commissioned question is whether
+   the programme is worth funding, and that is what `run` and `analyze` report.
+   Which of two people in a queue to serve first is a different question, worth
+   asking only once the first one has been answered.
+
 ## Layout
 
 ```
 config/     base.yaml, dev.yaml
 data/       parameters.csv, sources.csv, price_index.csv
-prep_model/ the model and the four commands
-tests/      test_invariants.py, test_machinery.py
+prep_model/ the model, the four commands, and env.py
+tests/      test_invariants.py, test_machinery.py, test_env.py
 outputs/    written by run and analyze; not checked in
 ```
