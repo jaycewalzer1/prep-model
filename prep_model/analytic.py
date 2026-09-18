@@ -179,3 +179,70 @@ def lifetime_burden_of_one_infection(p, discount_rate: float,
         net_cost=hiv_care + non_hiv_care + housing,
         qalys_lost=u_neg * a_neg - u_hiv * a_hiv,
     )
+
+
+@dataclass(frozen=True)
+class PriceBasis:
+    """One accounting basis and the acquisition price at which an arm breaks even."""
+
+    arm_id: str
+    label: str
+    current_price: float
+    discounted_doses: float
+    infections_averted: float
+    programme_cost: float
+    budget_price_as_modelled: float
+    budget_price_lifetime: float
+    threshold_price_lifetime: float
+    wtp: float
+
+    @property
+    def discount_required(self) -> float:
+        """Fraction the current price must fall by to reach the lifetime threshold."""
+        return (self.current_price - self.threshold_price_lifetime) / self.current_price
+
+    def as_dict(self) -> dict:
+        return {**asdict(self), "discount_required": self.discount_required}
+
+
+def break_even_price_bases(arm_id: str, label: str, current_price: float,
+                           discounted_doses: float, infections_averted: float,
+                           programme_cost: float, budget_price_as_modelled: float,
+                           burden: InfectionBurden, wtp: float) -> PriceBasis:
+    """The break-even dose price on three accounting bases at once.
+
+    Total cost is affine in the price of a dose and nothing in the model reacts to
+    price, so the slope is the discounted dose count and each basis is one
+    division. What separates the bases is not arithmetic but what an averted
+    infection is allowed to be worth.
+
+    ``budget_price_as_modelled`` is passed in from ``experiments.break_even_price``
+    and credits only the care cost the simulation actually books, which stops when
+    a person leaves the modelled population. The two ``_lifetime`` figures instead
+    credit ``burden``, the full mortality-limited stream, *replacing* the
+    simulation's credit rather than adding to it so that nothing is counted twice.
+
+    The gap between them is an accounting boundary, not a fact about the drug. A
+    city programme really does stop paying when someone moves away. A national
+    payer does not: the person keeps their coverage in the next state, and the
+    cost has left the spreadsheet rather than the world. Neither figure is the
+    right one to quote without saying which payer is asking.
+    """
+    if discounted_doses <= 0:
+        raise ValueError(f"arm {arm_id} buys no doses, so it has no break-even price")
+    budget = current_price + (infections_averted * burden.net_cost
+                              - programme_cost) / discounted_doses
+    threshold = current_price + (infections_averted * burden.value_at(wtp)
+                                 - programme_cost) / discounted_doses
+    return PriceBasis(
+        arm_id=arm_id,
+        label=label,
+        current_price=current_price,
+        discounted_doses=discounted_doses,
+        infections_averted=infections_averted,
+        programme_cost=programme_cost,
+        budget_price_as_modelled=budget_price_as_modelled,
+        budget_price_lifetime=budget,
+        threshold_price_lifetime=threshold,
+        wtp=wtp,
+    )
