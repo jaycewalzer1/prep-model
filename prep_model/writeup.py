@@ -148,15 +148,26 @@ def figure_elimination(elim: dict, path: Path) -> Path:
     return path
 
 
+def _money(x: float) -> str:
+    """A negative price is a price the payer would have to be paid to accept.
+
+    The sign belongs outside the dollar sign, because "$-443" reads as a typo
+    and this column is negative for every arm at the short horizon.
+    """
+    return f"-${abs(x):,.0f}" if x < 0 else f"${x:,.0f}"
+
+
 def render_price_table(bases: list) -> str:
     lines = ["| arm | price today | budget, as modelled | budget, lifetime | "
              "$100k/QALY, lifetime | cut to reach $100k col. |",
              "|---|---|---|---|---|---|"]
     for b in bases:
+        # One decimal, because a cut of 0.3% rounds to "0%" and reads as "the
+        # price is already right" when it is not.
         lines.append(
-            f"| {b.arm_id} {b.label} | ${b.current_price:,.0f} | "
-            f"${b.budget_price_as_modelled:,.0f} | ${b.budget_price_lifetime:,.0f} | "
-            f"${b.threshold_price_lifetime:,.0f} | {b.discount_required:.0%} |")
+            f"| {b.arm_id} {b.label} | {_money(b.current_price)} | "
+            f"{_money(b.budget_price_as_modelled)} | {_money(b.budget_price_lifetime)} | "
+            f"{_money(b.threshold_price_lifetime)} | {b.discount_required:.1%} |")
     return "\n".join(lines)
 
 

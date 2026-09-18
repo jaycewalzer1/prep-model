@@ -54,17 +54,27 @@ Every arm gains QALYs in every one of the 20 probabilistic draws
 (`P(QALY gain) = 1.0`). The health effect is not in doubt. What is in doubt is
 its size and its price.
 
-| | 5 years | | | 40 years | | |
+| arm | averted (5y) | ΔQALY (5y) | ICER (5y) | averted (40y) | ΔQALY (40y) | ICER (40y) |
 |---|---|---|---|---|---|---|
-| **arm** | **averted** | **ΔQALY** | **ICER** | **averted** | **ΔQALY** | **ICER** |
 | B clinic lenacapavir | 114 | 347 | $205,342 | 1,376 | 774 | $667,669 |
 | C low-barrier lenacapavir | 236 | 670 | $468,567 | 3,706 | 1,805 | $1,450,148 |
 | D low-barrier cabotegravir | 216 | 632 | $389,378 | 3,259 | 1,641 | $1,171,363 |
 | E matched contact control | 133 | 530 | **$84,691** | 1,752 | 1,220 | **$72,577** |
 
 Consolidated public-sector perspective, incremental against usual care.
-The efficiency frontier is **A → E → B → D → C** at both horizons: arm E is the
-first thing you buy, and low-barrier lenacapavir is the last.
+
+Those are pairwise ICERs against usual care, which is *not* the same as the
+efficiency frontier. On the frontier, **arm B is dominated at both horizons** —
+it costs more than arm E and buys fewer QALYs — and at 40 years **arm D is
+extended-dominated** as well. What survives is:
+
+| horizon | frontier | dropped |
+|---|---|---|
+| 5 years | A → E → D → C | B dominated |
+| 40 years | A → E → C | B dominated, D extended-dominated |
+
+Arm E is the first thing you buy at either horizon, and the step from E to
+anything injectable costs between $1.7M and $4.3M per QALY.
 
 ### How many lives?
 
@@ -87,7 +97,7 @@ between C and D at 5 years as noise, not a finding.
 
 Probability cost-effective at $100,000/QALY: **arm C 15%, arm B 5%, arm D 0%,
 arm E 15%** (rising to 40% at $150,000). Probability cost-*saving*: **zero for
-every arm**. The 95% interval on infections averted for arm C is **28 to 874** —
+every arm**. The 95% interval on infections averted for arm C is **28 to 873** —
 an interval that spans "barely worth doing" to "transformative", which is the
 honest width given 20 draws over mostly hypothetical parameters.
 
@@ -111,17 +121,17 @@ dose count is the slope.
 
 | arm | price today | budget, as modelled | budget, lifetime | $100k/QALY, lifetime | cut to reach $100k col. |
 |---|---|---|---|---|---|
-| B clinic lenacapavir | $14,109 | $-2,273 | $10,419 | $14,064 | 0% |
-| C low-barrier lenacapavir | $14,109 | $-443 | $4,441 | $6,021 | 57% |
-| D low-barrier cabotegravir | $4,049 | $-398 | $1,450 | $2,014 | 50% |
+| B clinic lenacapavir | $14,109 | -$2,273 | $10,419 | $14,064 | 0.3% |
+| C low-barrier lenacapavir | $14,109 | -$443 | $4,441 | $6,021 | 57.3% |
+| D low-barrier cabotegravir | $4,049 | -$398 | $1,450 | $2,014 | 50.3% |
 
 **40-year horizon**
 
 | arm | price today | budget, as modelled | budget, lifetime | $100k/QALY, lifetime | cut to reach $100k col. |
 |---|---|---|---|---|---|
-| B clinic lenacapavir | $14,109 | $268 | $15,359 | $20,478 | **−45%** |
-| C low-barrier lenacapavir | $14,109 | $769 | $8,267 | $10,980 | 22% |
-| D low-barrier cabotegravir | $4,049 | $107 | $2,775 | $3,734 | 8% |
+| B clinic lenacapavir | $14,109 | $268 | $15,359 | $20,478 | **−45.1%** |
+| C low-barrier lenacapavir | $14,109 | $769 | $8,267 | $10,980 | 22.2% |
+| D low-barrier cabotegravir | $4,049 | $107 | $2,775 | $3,734 | 7.8% |
 
 The three columns differ only in **what an averted infection is allowed to be
 worth**:
@@ -140,12 +150,16 @@ and the cost has left the spreadsheet rather than the world. On that basis
 low-barrier lenacapavir breaks even around **$8,300 a dose — a 41% discount**.
 
 The unexpected result is **arm B**: clinic-delivered lenacapavir breaks even at
-$15,359, *above* what a dose costs today. It averts an infection every 28 doses
-where low-barrier delivery needs 53, because clinic attendees are a more
-reachable, higher-yield group. But B averts 1,376 infections against C's 3,706.
-**B is the efficient slice; it is not the answer to the epidemic.** Efficiency
-and scale point at different arms here, and a programme has to choose which it
-is buying.
+$15,359 over 40 years, *above* what a dose costs today. It averts an infection
+every 28 doses where low-barrier delivery needs 53, because clinic attendees are
+a more reachable, higher-yield group.
+
+That does not make it the arm to fund, and the two facts sit together
+uncomfortably on purpose. B averts 1,376 infections against C's 3,706, and it is
+**dominated on the frontier** — arm E reaches more people for less money. A dose
+given through arm B pays for itself; the *programme* still loses to simply
+showing up. **Efficiency per dose and value per dollar point at different arms
+here**, and a programme has to be explicit about which one it is buying.
 
 ### Could you just eliminate HIV in this population?
 
@@ -213,9 +227,10 @@ The last is lower than the second because infected people spend time
 undiagnosed and unsuppressed, costed below the ART rate.
 
 **The migration rate is among the most consequential parameters in the model and
-it is graded D — hypothetical.** Halving it from 12% to 1% roughly doubles the
-recovered cost per infection, to $213,210. If you improve one input before
-quoting any of this, improve that one.
+it is graded D — hypothetical.** Cutting it from 12% to 1% a year roughly doubles
+the recovered cost per infection, to $213,210 — and also raises total infections
+in every arm, because people stay exposed for longer. If you improve one input
+before quoting any of this, improve that one.
 
 ---
 
